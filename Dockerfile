@@ -7,7 +7,7 @@
 # Bygg:  docker build -t qgis-varnish .
 # Se README.md för hur man kör och testar.
 # =============================================================================
-ARG QGIS_SERVER_VERSION=3.44.14
+ARG QGIS_SERVER_VERSION=3.44.15
 FROM 3liz/qgis-map-server:${QGIS_SERVER_VERSION}
 
 LABEL org.opencontainers.image.title="QGIS Server med Varnish" \
