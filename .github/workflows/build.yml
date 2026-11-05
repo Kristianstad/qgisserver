@@ -2,7 +2,7 @@ name: Build QGIS Server image
 
 on:
   push:
-    branches: [main, slim, ultra-slim]
+    branches: [main]
     tags: ['*']
     paths-ignore:
       - README.md
@@ -32,6 +32,10 @@ jobs:
     permissions:
       contents: read
       packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [standard, slim, ultra-slim]
 
     steps:
       - name: Checkout
@@ -55,28 +59,24 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Select image variant
-        id: variant
-        run: |
-          case "$GITHUB_REF" in
-            refs/heads/slim)       echo "name=slim" >> "$GITHUB_OUTPUT" ;;
-            refs/heads/ultra-slim) echo "name=ultra-slim" >> "$GITHUB_OUTPUT" ;;
-            *)                     echo "name=" >> "$GITHUB_OUTPUT" ;;
-          esac
-
       - name: Create image tags
         id: meta
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.IMAGE }}
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=raw,value=${{ steps.qgis.outputs.version }},enable={{is_default_branch}}
-            type=raw,value=${{ steps.variant.outputs.name || 'none' }},enable=${{ steps.variant.outputs.name != '' }}
-            type=raw,value=${{ steps.qgis.outputs.version }}-${{ steps.variant.outputs.name || 'none' }},enable=${{ steps.variant.outputs.name != '' }}
-            type=sha,enable=${{ steps.variant.outputs.name == '' }}
-            type=sha,suffix=-${{ steps.variant.outputs.name || 'none' }},enable=${{ steps.variant.outputs.name != '' }}
-            type=ref,event=tag
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' && matrix.variant == 'standard' }}
+            type=raw,value=${{ steps.qgis.outputs.version }},enable=${{ github.ref == 'refs/heads/main' && matrix.variant == 'standard' }}
+            type=raw,value=slim,enable=${{ github.ref == 'refs/heads/main' && matrix.variant == 'slim' }}
+            type=raw,value=${{ steps.qgis.outputs.version }}-slim,enable=${{ github.ref == 'refs/heads/main' && matrix.variant == 'slim' }}
+            type=raw,value=ultra-slim,enable=${{ github.ref == 'refs/heads/main' && matrix.variant == 'ultra-slim' }}
+            type=raw,value=${{ steps.qgis.outputs.version }}-ultra-slim,enable=${{ github.ref == 'refs/heads/main' && matrix.variant == 'ultra-slim' }}
+            type=sha,enable=${{ matrix.variant == 'standard' }}
+            type=sha,suffix=-slim,enable=${{ matrix.variant == 'slim' }}
+            type=sha,suffix=-ultra-slim,enable=${{ matrix.variant == 'ultra-slim' }}
+            type=ref,event=tag,enable=${{ matrix.variant == 'standard' }}
+            type=ref,event=tag,suffix=-slim,enable=${{ matrix.variant == 'slim' }}
+            type=ref,event=tag,suffix=-ultra-slim,enable=${{ matrix.variant == 'ultra-slim' }}
           labels: |
             org.opencontainers.image.licenses=NOASSERTION
 
@@ -84,34 +84,35 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
+          target: ${{ matrix.variant }}
           load: true
           push: false
-          tags: qgisserver:test
+          tags: qgisserver:test-${{ matrix.variant }}
           build-args: |
             QGIS_SERVER_VERSION=${{ steps.qgis.outputs.version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.variant }}
+          cache-to: type=gha,scope=${{ matrix.variant }},mode=max
           provenance: false
 
-      - name: Build layered variant for size comparison
-        if: steps.variant.outputs.name != ''
+      - name: Build full image for size comparison
+        if: matrix.variant != 'standard'
         uses: docker/build-push-action@v7
         with:
           context: .
-          target: build
+          target: full
           load: true
           push: false
-          tags: qgisserver:layered
+          tags: qgisserver:full
           build-args: |
             QGIS_SERVER_VERSION=${{ steps.qgis.outputs.version }}
-          cache-from: type=gha
+          cache-from: type=gha,scope=${{ matrix.variant }}
           provenance: false
 
       - name: Start QGIS Server
         run: |
           chmod -R a+rX tests/smoke
           docker run -d --name smoke -p 18080:8080 \
-            -v "$PWD/tests/smoke:/qgis-data:ro" qgisserver:test
+            -v "$PWD/tests/smoke:/qgis-data:ro" qgisserver:test-${{ matrix.variant }}
           for i in $(seq 1 60); do
             if [ "$(docker inspect -f '{{.State.Running}}' smoke)" != "true" ]; then
               echo "::error::QGIS Server exited during startup"
@@ -150,13 +151,13 @@ jobs:
           curl -fsS -o ref-map.png "http://127.0.0.1:18081/ows/?MAP=smoke.qgs&SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=data&STYLES=&SRS=EPSG:3006&BBOX=300000,6100000,900000,6800000&WIDTH=400&HEIGHT=400&FORMAT=image/png"
           cmp new-map.png ref-map.png
 
-      - name: Check base image environment
-        if: steps.variant.outputs.name != ''
+      - name: Verify inherited environment
+        if: matrix.variant != 'standard'
         run: |
           base=3liz/qgis-map-server:${{ steps.qgis.outputs.version }}
           docker pull -q "$base"
           env_of() { docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$1" | sort; }
-          missing=$(comm -23 <(env_of "$base") <(env_of qgisserver:test))
+          missing=$(comm -23 <(env_of "$base") <(env_of qgisserver:test-${{ matrix.variant }}))
           if [ -n "$missing" ]; then
             echo "::error::Missing base image environment values:"
             echo "$missing"
@@ -164,16 +165,13 @@ jobs:
           fi
 
       - name: Check compressed image size
-        if: steps.variant.outputs.name != ''
+        if: matrix.variant != 'standard'
         run: |
           size() { docker save "$1" | gzip -6 | wc -c; }
-          layered=$(size qgisserver:layered)
-          flat=$(size qgisserver:test)
-          echo "| Image | MiB |" >> "$GITHUB_STEP_SUMMARY"
-          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Layered | $((layered / 1048576)) |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Flattened | $((flat / 1048576)) |" >> "$GITHUB_STEP_SUMMARY"
-          [ $((flat * 10)) -lt $((layered * 9)) ]
+          full=$(size qgisserver:full)
+          variant=$(size qgisserver:test-${{ matrix.variant }})
+          echo "${{ matrix.variant }}: $((variant / 1048576)) MiB (full: $((full / 1048576)) MiB)" | tee -a "$GITHUB_STEP_SUMMARY"
+          [ $((variant * 10)) -lt $((full * 9)) ]
 
       - name: Show logs and clean up
         if: always()
@@ -194,10 +192,11 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
+          target: ${{ matrix.variant }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             QGIS_SERVER_VERSION=${{ steps.qgis.outputs.version }}
-          cache-from: type=gha
+          cache-from: type=gha,scope=${{ matrix.variant }}
           provenance: false

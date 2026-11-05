@@ -24,15 +24,15 @@ QGIS Server settings use the `QGSRV_...` environment variables documented by [py
 
 ## Image variants
 
-GitHub Actions builds three variants from separate branches:
+GitHub Actions builds all three variants from the same commit using Dockerfile targets:
 
-| Branch | Tags | Contents |
+| Target | Tags | Contents |
 |---|---|---|
 | `main` | `latest`, `<qgis-version>`, `sha-<commit>` | Upstream QGIS Server base image with a worker default and this project's license. |
 | `slim` | `slim`, `<qgis-version>-slim`, `sha-<commit>-slim` | A flattened image without package documentation (copyright files are kept), Python test directories, or build caches. |
 | `ultra-slim` | `ultra-slim`, `<qgis-version>-ultra-slim`, `sha-<commit>-ultra-slim` | Also removes `scipy`, `sympy`, `matplotlib`, `plotly`, and QGIS cpt-city color ramps. Plugins requiring those Python modules and projects using those ramps are unsupported. |
 
-Use a version-specific tag for deployments when you want to control QGIS upgrades. Variant tags are built from their corresponding branch. Images are published to `ghcr.io/kristianstad/qgisserver`.
+Use a version-specific tag for deployments when you want to control QGIS upgrades. Images are published to `ghcr.io/kristianstad/qgisserver`.
 
 ## Configuration and logs
 
