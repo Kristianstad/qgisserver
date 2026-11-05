@@ -1,343 +1,62 @@
-# QGIS Server + Varnish i en container
+# QGIS Server images
 
-En avbild som bygger på `3liz/qgis-map-server` och lägger till Varnish Cache framför.
-Varnish cachar kartbilder (GetMap), teckenförklaringar (GetLegendGraphic) och
-GetCapabilities, så att QGIS Server slipper rita samma bild om och om igen.
+Docker images for [QGIS Server](https://github.com/3liz/py-qgis-server), based on `3liz/qgis-map-server`. This project does not include Varnish or another reverse proxy. QGIS Server receives requests directly on port 8080.
 
-```
-webbläsare ──► Varnish (port 8080, cache) ──► QGIS Server (bara inuti containern)
-```
+## Run
 
-**Du behöver inte bygga något själv.** Färdigbyggda avbilder finns på GitHub Container Registry
-(`ghcr.io`) och hämtas automatiskt första gången du kör dem, se [Kom igång](#kom-igång).
-
-Två program i en container är inte "typiskt Docker", men gör avbilden enkel att
-använda: det finns bara en sak att starta. Om något av programmen slutar fungera
-avslutas hela containern, så att Docker kan starta om den.
-
-## Filer
-
-| Fil | Vad den gör |
-|---|---|
-| `Dockerfile` | Bygger avbilden. Här står alla inställningar (`ENV`) med förklaringar. |
-| `default.vcl.template` | Varnish-konfigurationen (mall). |
-| `start.sh` | Startar QGIS Server och Varnish och håller koll på dem. |
-| `.github/workflows/build.yml` | GitHub Actions: bygger, testar och publicerar den färdiga avbilden. |
-| `.gitattributes` | Ser till att skripten alltid har Unix-radslut (LF). |
-| `LICENSE` | Licens (BSD 2-Clause) för filerna i det här repot. |
-| `docker-compose.yml` | Färdigt exempel för att köra den färdigbyggda avbilden med Docker (fungerar inte med `wslc`, se avsnittet om Windows). |
-
-## Kom igång
-
-> Kör du Windows utan Docker Desktop? Gå till [Köra på Windows med WSL](#köra-på-windows-med-wsl).
-
-Det finns en färdigbyggd avbild, så det räcker att starta den. Docker hämtar den automatiskt första gången.
-
-1. Lägg dina QGIS-projekt i en mapp, t.ex. `projekt/` (filen `projekt/mittprojekt.qgs`).
-2. Starta:
+Put QGIS projects and their data files in a local directory, then run:
 
 ```bash
-docker run -d --name kartor -p 8080:8080 -v "$PWD/projekt:/qgis-data" ghcr.io/kristianstad/qgisserver_varnish:latest
+docker run -d --name qgisserver -p 8080:8080 \
+  -v "$PWD/projects:/qgis-data" \
+  ghcr.io/kristianstad/qgisserver:latest
 ```
 
-Eller med compose (hämta `docker-compose.yml` från det här repot och lägg den bredvid mappen `projekt`):
+The projects must be readable by the QGIS Server process (UID 9001). Do not set `--user`; the base image configures the server process itself.
 
-```bash
-docker compose up -d
+Check the service at `http://localhost:8080/ping`. A WMS GetCapabilities request for `projects/map.qgs` is:
+
+```text
+http://localhost:8080/ows/?MAP=map.qgs&SERVICE=WMS&REQUEST=GetCapabilities
 ```
 
-3. Testa i webbläsaren (byt ut `mittprojekt` mot ditt projektnamn):
+QGIS Server settings use the `QGSRV_...` environment variables documented by [py-qgis-server](https://docs.3liz.org/py-qgis-server/). The default worker count is 2; set `QGSRV_SERVER_WORKERS` to match the CPU capacity allocated to the container.
 
-- `http://localhost:8080/ping` – ska svara `{"status": "ok"}`
-- `http://localhost:8080/ows/mittprojekt?SERVICE=WMS&REQUEST=GetCapabilities`
-- Det "vanliga" formatet fungerar också: `http://localhost:8080/ows/?MAP=mittprojekt.qgs&SERVICE=WMS&REQUEST=GetCapabilities`
+## Image variants
 
-Det första anropet tar längre tid (QGIS laddar projektet). Upprepa samma anrop så ser
-du att det går snabbare – då kommer svaret från cachen.
+GitHub Actions builds three variants from separate branches:
 
-> Dina QGIS-projekt måste vara läsbara för användaren med id 9001 (den QGIS Server körs som).
-> Kör inte containern med `--user`.
-
-## Färdigbyggd avbild
-
-Avbilden `ghcr.io/kristianstad/qgisserver_varnish` byggs och testas automatiskt av GitHub Actions
-vid varje ändring av koden och är öppen att hämta utan inloggning. Alla versioner finns på
-[paketsidan](https://github.com/Kristianstad/qgisserver_varnish/pkgs/container/qgisserver_varnish).
-
-| Tagg | Betydelse |
-|---|---|
-| `latest` | Senaste bygget. Bra för att prova. |
-| `3.44.14` (och andra versionsnummer) | Senaste bygget som bygger på just den versionen av QGIS Server. Använd en sådan tagg i drift, så att du själv väljer när du byter QGIS-version. |
-| `sha-<kod>` | Ett exakt bygge som aldrig ändras. Taggarna finns på paketsidan. |
-
-Exempel: `docker run ... ghcr.io/kristianstad/qgisserver_varnish:3.44.14`
-
-**Uppdatera till senaste bygget** (projekten ligger kvar, eftersom de ligger i din egen mapp):
-
-```bash
-docker pull ghcr.io/kristianstad/qgisserver_varnish:latest
-docker rm -f kartor
-docker run -d --name kartor ...   # samma kommando som förut
-```
-
-Med compose: `docker compose pull && docker compose up -d`
-
-**Bra att veta:**
-
-- Avbilden byggs bara för `amd64` (vanliga Intel/AMD-datorer). På ARM, t.ex. Mac med M-chip, kan den köras via emulering i Docker Desktop, men det kan bli långsamt.
-- Vill du ändra något i avbilden eller bygga den själv, se nedan.
-
-### Bygga avbilden själv (valfritt)
-
-Hämta filerna från det här repot (*Code* → *Download ZIP*, eller `git clone`) och kör i mappen:
-
-```bash
-docker build -t qgis-varnish .
-docker run -d --name kartor -p 8080:8080 -v "$PWD/projekt:/qgis-data" qgis-varnish
-```
-
-Med compose: ta bort raden `image:` i `docker-compose.yml`, ta bort `#` framför `build: .` och kör `docker compose up --build`.
-
-## Köra på Windows med WSL
-
-Sedan WSL 2.9.3 kan Windows köra Linux-containrar direkt, utan Docker Desktop, med kommandot
-`wslc`. Allt görs i **PowerShell**. (Har du redan Docker Desktop fungerar instruktionerna ovan som de står.)
-
-### 1. Installera eller uppdatera WSL
-
-Du behöver Windows 11 (eller Windows 10 version 2004 / build 19041 eller senare) och virtualisering
-påslaget i datorns BIOS/UEFI (heter ofta *Intel VT-x*, *AMD-V* eller *SVM Mode*; är oftast redan på).
-
-1. Öppna PowerShell **som administratör**: högerklicka på Start-knappen och välj *Terminal (administratör)*,
-   eller sök på "PowerShell" och välj *Kör som administratör*.
-2. Installera WSL. Containrar behöver ingen Linux-distribution, så den hoppas över:
-
-   ```powershell
-   wsl --install --no-distribution
-   ```
-
-   (Vill du även ha ett vanligt Linux-fönster, t.ex. Ubuntu, kör du i stället `wsl --install`.)
-3. **Starta om datorn.**
-4. Uppdatera WSL till senaste versionen (görs även om WSL redan var installerat sedan tidigare):
-
-   ```powershell
-   wsl --update
-   ```
-
-   **Starta om datorn igen efter uppdateringen.** Annars hittas kommandot `wslc` ofta inte, även i ett nytt PowerShell-fönster.
-5. Kontrollera att allt fungerar:
-
-   ```powershell
-   wsl --version      # WSL-versionen ska vara 2.9.3 eller högre
-   wslc version
-   wslc run --rm hello-world
-   ```
-
-   Den sista raden hämtar en liten testavbild och ska skriva ut ett "Hello"-meddelande.
-
-### 2. Starta containern
-
-Lägg dina QGIS-projekt i en mapp, t.ex. `C:\kartor\projekt`, och starta den färdigbyggda avbilden:
-
-```powershell
-wslc run -d --rm --name kartor -p 8080:8080 -v "C:\kartor\projekt:/qgis-data" ghcr.io/kristianstad/qgisserver_varnish:latest
-```
-
-Avbilden hämtas automatiskt första gången (några hundra MB), så första starten tar en stund.
-Du behöver inte bygga något själv. Se [Färdigbyggd avbild](#färdigbyggd-avbild) för vilka taggar som finns.
-
-| Del | Betydelse |
-|---|---|
-| `-d` | Kör i bakgrunden. |
-| `--rm` | Containern tas bort automatiskt när du stoppar den. |
-| `--name kartor` | Namnet du använder i övriga kommandon. |
-| `-p 8080:8080` | Gör port 8080 i containern nåbar på `http://localhost:8080`. Är porten upptagen, använd t.ex. `-p 8081:8080`. |
-| `-v "C:\kartor\projekt:/qgis-data"` | Gör Windows-mappen synlig i containern. Windows-sökväg till vänster, `/qgis-data` till höger. |
-
-Inställningar (se tabellen längre ner) läggs till med `-e`, t.ex. `-e QGSRV_SERVER_WORKERS=4 -e VARNISH_CACHE_SIZE=512m`.
-
-Testa sedan i webbläsaren: `http://localhost:8080/ping` ska svara `{"status": "ok"}`.
-(Vill du testa från PowerShell, skriv `curl.exe` och inte bara `curl`, annars körs ett annat kommando.)
-
-> `docker-compose.yml` går inte att använda med `wslc`, eftersom Compose-stöd ännu saknas i WSL-containrar.
-> Använd kommandona ovan, eller Docker Desktop om du vill använda compose.
-
-### 3. Vardagskommandon
-
-| Vad du vill göra | Docker | WSL (`wslc`) |
+| Branch | Tags | Contents |
 |---|---|---|
-| Se körande containrar | `docker ps` | `wslc container list` |
-| Läsa loggar | `docker logs kartor` | `wslc container logs kartor` |
-| Köra ett kommando i containern | `docker exec kartor ...` | `wslc exec kartor ...` |
-| Stoppa | `docker stop kartor` | `wslc container stop kartor` |
-| Se resursanvändning | `docker stats` | `wslc stats` |
-| Ta bort stoppade containrar / oanvända avbilder | `docker container prune` / `docker image prune` | `wslc container prune` / `wslc image prune` |
+| `main` | `latest`, `<qgis-version>`, `sha-<commit>` | Upstream QGIS Server base image with a worker default and this project's license. |
+| `slim` | `slim`, `<qgis-version>-slim`, `sha-<commit>-slim` | A flattened image without package documentation (copyright files are kept), Python test directories, or build caches. |
+| `ultra-slim` | `ultra-slim`, `<qgis-version>-ultra-slim`, `sha-<commit>-ultra-slim` | Also removes `scipy`, `sympy`, `matplotlib`, `plotly`, and QGIS cpt-city color ramps. Plugins requiring those Python modules and projects using those ramps are unsupported. |
 
-Alla kommandon längre ner i den här filen som börjar med `docker exec` körs alltså som `wslc exec`, t.ex.
-för att rensa cachen:
+Use a version-specific tag for deployments when you want to control QGIS upgrades. Variant tags are built from their corresponding branch. Images are published to `ghcr.io/kristianstad/qgisserver`.
+
+## Configuration and logs
+
+Set QGIS Server options with `-e`, for example `-e QGSRV_SERVER_WORKERS=4`. Logs are written to the container output:
+
+```bash
+docker logs qgisserver
+```
+
+On Windows without Docker Desktop, WSL 2.9.3 or later can run Linux containers with `wslc`:
 
 ```powershell
-wslc exec kartor curl -X BAN -H "X-Ban-Project: mittprojekt" http://localhost:8080/
+wslc run -d --rm --name qgisserver -p 8080:8080 -v "C:\qgis-projects:/qgis-data" ghcr.io/kristianstad/qgisserver:latest
 ```
 
-Ska du ändra något (nya inställningar): stoppa containern och kör `wslc run ...` igen. Vill du byta till en nyare avbild, ange en ny tagg i `wslc run` (t.ex. en ny QGIS-version eller en `sha-...`-tagg från [paketsidan](https://github.com/Kristianstad/qgisserver_varnish/pkgs/container/qgisserver_varnish)); en tagg du inte har sedan tidigare hämtas alltid.
-
-### Bygga avbilden själv med wslc (valfritt)
-
-Bara om du vill ändra något i avbilden. Hämta filerna från det här repot (*Code* → *Download ZIP*, eller `git clone`) och lägg dem i en mapp, t.ex. `C:\kartor\qgis-varnish`. Kör sedan:
-
-```powershell
-cd C:\kartor\qgis-varnish
-wslc build -t qgis-varnish .
-```
-
-Första bygget tar några minuter eftersom basavbilden är stor. Kontrollera resultatet med `wslc image list`.
-Om `wslc` säger att den inte hittar någon `Containerfile` (det är WSL:s namn för Dockerfile), ange filen själv:
-`wslc build -f Dockerfile -t qgis-varnish .`
-
-Starta sedan din egen avbild med samma `wslc run`-kommando som ovan, men med `qgis-varnish` i stället för `ghcr.io/kristianstad/qgisserver_varnish:latest`.
-
-### VARNISH_MAX_CONNECTIONS och kö mot QGIS Server
-
-Varnish skickar bara vidare ett visst antal anrop samtidigt till QGIS Server. Taket
-ställs in med `VARNISH_MAX_CONNECTIONS`.
-
-QGIS Server kan bara rita lika många bilder samtidigt som det finns workers
-(`QGSRV_SERVER_WORKERS`). Anrop utöver det väntar i en kö hos QGIS Server tills en
-worker blir ledig. `VARNISH_MAX_CONNECTIONS` avgör hur stor den kön får bli:
-
-- **Standard** är `QGSRV_SERVER_WORKERS` × 20. Med 4 workers blir det 80 samtidiga
-  anrop: 4 som ritas just nu och upp till 76 som väntar, alltså en kö på ungefär
-  20 anrop per worker.
-- **När taket är nått** köar Varnish inte längre. Nästa anrop får direkt felet
-  **503** (Varnish försöker först igen enligt `VARNISH_MAX_RETRIES` och `VARNISH_MAX_RESTARTS`, men är det
-  fortfarande fullt så får användaren ett 503).
-- **För lågt värde** (nära antalet workers) ger alltså 503 redan vid måttliga
-  belastningstoppar. **För högt värde** ger långa köer: användare väntar länge, och
-  anrop kan hinna ge timeout (`VARNISH_BACKEND_TIMEOUT`) innan de ens börjar ritas. Då är det
-  ofta bättre att få ett snabbt 503 och försöka igen.
-- Cachade svar påverkas inte; de går aldrig till QGIS Server och räknas inte.
-
-Värdet kan skrivas som ett tal eller som ett uttryck med variabelnamn:
+## Build locally
 
 ```bash
-docker run ... -e VARNISH_MAX_CONNECTIONS=200 ...
-docker run ... -e 'VARNISH_MAX_CONNECTIONS=QGSRV_SERVER_WORKERS*30' ...
+docker build -t qgisserver .
+docker run --rm -p 8080:8080 -v "$PWD/projects:/qgis-data" qgisserver
 ```
 
-Skriv variabelnamnet **utan** `$` (med `$` fungerar det också, men då måste skalet inte
-expandera det – använd enkelcitat i `docker run`, och `$$` i en compose-fil). Citera uttrycket så att
-`*` inte tolkas av skalet. Tillåtna tecken: bokstäver, siffror, `_`, mellanslag, `+ - * / ( )`.
+The source image is amd64. Other architectures may require emulation.
 
-## Felsökning på Windows
+## License
 
-- **`wsl --install` klagar på virtualisering:** slå på virtualisering i BIOS/UEFI (se ovan) och försök igen.
-- **`wslc` hittas inte:** kör `wsl --update` och **starta om datorn** (ett nytt PowerShell-fönster räcker inte alltid). Kontrollera sedan att `wsl --version` visar 2.9.3 eller högre.
-- **Containern stannar direkt eller projekten hittas inte:** läs `wslc container logs kartor`. Kontrollera att sökvägen efter `-v` stämmer och att projektmappen finns.
-- Microsofts guide: <https://learn.microsoft.com/en-us/windows/wsl/tutorials/wsl-containers>
-
-## Så fungerar cachen
-
-- Bara `GET`/`HEAD` av `REQUEST=GetMap`, `GetLegendGraphic` och `GetCapabilities` cachas. Allt annat går rakt igenom.
-- Ett svar cachas i `VARNISH_DEFAULT_TTL` sekunder (standard 60). Lägg till `&ttl=300` i
-  webbadressen för att cacha 300 sekunder (högst 90000), eller `&ttl=0` för ingen cache alls.
-  Samma sak går att styra med headern `ttl: 300`. Står ttl i både URL och header gäller URL:en.
-  `ttl=300` i URL:en och `ttl: 300` som header delar cacheobjekt; olika ttl-värden ger olika objekt.
-  Parametern ttl skickas inte vidare till QGIS Server. Ogiltiga värden i headern ignoreras, och
-  inledande nollor tas bort (`ttl=0030` är samma sak som `ttl=30`, och `ttl=00` samma som `ttl=0`).
-- Svarar QGIS Server med 503/504 gör Varnish först `VARNISH_MAX_RETRIES` nya försök och därefter
-  `VARNISH_MAX_RESTARTS` omstarter av anropet. Det gäller bara snabba fel: har anropet redan väntat
-  `VARNISH_RETRY_MAX_AGE` sekunder (standard 10), t.ex. på en timeout, görs inga fler försök och felet
-  levereras direkt. Annars skulle en långsam kartbild som alltid timear ut belasta QGIS Server 3-6 gånger
-  (upp till 6-12 minuter med 120 s timeout). Omstart görs dessutom bara för `GET`/`HEAD`; ett misslyckat
-  `POST` (t.ex. WFS-T) ger direkt 503 och upprepas aldrig.
-- Parametern `time` tas bort före cachning (typisk "cache-busting"-parameter). Ändra med `VARNISH_STRIP_PARAMS`.
-- Parametrarnas ordning spelar ingen roll: samma anrop i annan ordning delar cache.
-- Snygga adresser: `/ows/<projekt>?...` skrivs om till `/ows/?map=<projekt>.qgs&...`
-  (använd `VARNISH_PROJECT_EXTENSION=qgz` om dina projekt är `.qgz`).
-
-### Rensa cachen
-
-Cachen kan rensas per projekt eller per lager (kommandot körs inuti containern):
-
-```bash
-docker exec kartor curl -X BAN -H "X-Ban-Project: mittprojekt" http://localhost:8080/
-docker exec kartor curl -X BAN -H "X-Ban-Layer: mittlager" http://localhost:8080/
-```
-
-Projektnamnet skrivs utan `.qgs`/`.qgz` (men med eventuell undermapp, t.ex. `mapp/mittprojekt`).
-Namn med mellanslag eller å/ä/ö skrivs URL-kodade, t.ex. `Fastighetsgr%C3%A4nser%20norra`.
-Rensning utifrån är avstängd som standard; se `VARNISH_BAN_HOST` nedan.
-
-### Rensa cachen från en webbsida
-
-Det finns också en enkel webbsida där man kan skriva in ett projekt eller ett lager och rensa dess cache.
-Sidan är **avstängd** tills du anger användare och lösenord (minst 8 tecken):
-
-```bash
-docker run -d --name kartor -p 8080:8080 -v "$PWD/projekt:/qgis-data" \
-    -e VARNISH_ADMIN_USER=admin -e VARNISH_ADMIN_PASSWORD='byt-till-ett-langt-losenord' ghcr.io/kristianstad/qgisserver_varnish:latest
-```
-
-Öppna sedan `http://localhost:8080/_admin` och logga in. (Används `VARNISH_URL_PREFIX` ligger sidan på `<prefix>/_admin`.)
-Med `wslc` på Windows läggs samma `-e`-flaggor till i `wslc run`-kommandot.
-
-Bra att veta:
-
-- **Använd https om sidan nås över ett nätverk.** Lösenordet skickas annars i klartext. På den egna datorn
-  (`localhost`) går det bra utan. Lägg en proxy med https framför containern, t.ex. Traefik eller nginx.
-- **Välj ett långt lösenord.** Det finns ingen spärr mot att någon gissar.
-- **Ingen IP-begränsning ingår.** I Docker Desktop ser containern inte klientens riktiga IP-adress (alla anrop
-  ser ut att komma från samma adress), och det kan gälla WSL-containrar också. Vill du begränsa vem som når sidan, gör det i en
-  proxy eller brandvägg framför containern. Ska bara den egna datorn nå den kan du i Docker publicera porten
-  bara lokalt: `-p 127.0.0.1:8080:8080`.
-- Sidan skyddar mot att en annan webbplats får din webbläsare att rensa cachen i smyg.
-- Skriv namnen som vanligt (mellanslag och å/ä/ö fungerar). Namn med parenteser, citattecken, `!` eller `~`
-  stöds inte här; rensa i så fall hela projektet. Ett lager rensas i alla projekt.
-- Sidan kan inte visa vad som ligger i cachen, bara rensa det du skriver in.
-
-## Inställningar
-
-Sätts med `-e NAMN=värde` (docker run) eller under `environment:` (compose).
-
-| Variabel | Standard | Betydelse |
-|---|---|---|
-| `VARNISH_CACHE_SIZE` | `256m` | Cachens storlek i RAM (t.ex. `1g`). Låt containern få mer minne än så. |
-| `VARNISH_DEFAULT_TTL` | `60` | Sekunder ett svar cachas när anropet saknar `ttl`. |
-| `VARNISH_BACKEND_TIMEOUT` | `120` | Hur länge Varnish väntar på QGIS Server. `QGSRV_SERVER_TIMEOUT` blir 1 sekund mindre. |
-| `VARNISH_MAX_CONNECTIONS` | tomt | Max samtidiga anrop till QGIS Server. Tomt = `QGSRV_SERVER_WORKERS` × 20. |
-| `VARNISH_MAX_RETRIES` / `VARNISH_MAX_RESTARTS` | `2` / `1` | Antal nya försök vid 503/504 (bara för snabba fel, se `VARNISH_RETRY_MAX_AGE`). |
-| `VARNISH_RETRY_MAX_AGE` | `10` | Retries och omstart av ett misslyckat anrop görs bara om anropet är yngre än så här många sekunder. Anrop som väntat längre (t.ex. på en timeout) ger felet direkt. `0` stänger av alla nya försök. |
-| `VARNISH_CACHE_REQUESTS` | `GetMap\|GetLegendGraphic` | Vilka `REQUEST`-typer som cachas (t.ex. `GetMap\|GetLegendGraphic\|GetTile`). |
-| `VARNISH_STRIP_PARAMS` | `time` | Parametrar som tas bort före cachning (`\|`-separerade, tomt = inga). |
-| `VARNISH_URL_PREFIX` | tomt | Prefix för snygga adresser, t.ex. `/kartor`. |
-| `VARNISH_PROJECT_EXTENSION` | `qgs` | Filändelse som läggs på projektnamnet i snygga adresser (`qgs` eller `qgz`). |
-| `VARNISH_FORCE_HTTPS` | `no` | `yes` om en proxy framför hanterar https men inte skickar `X-Forwarded-Proto`. |
-| `VARNISH_BAN_HOST` | tomt | Host-värde som får rensa cachen utifrån. Använd bara om Varnish inte är nåbar för obehöriga. |
-| `VARNISH_ADMIN_USER` / `VARNISH_ADMIN_PASSWORD` | tomt | Slår på adminsidan `/_admin` för cache-rensning. Båda måste anges; lösenordet minst 8 tecken. |
-| `VARNISH_PROBE_URL` | `/ping` | Adress för hälsokontroller mot QGIS Server. |
-| `VARNISH_PORT` | `8080` | Porten Varnish lyssnar på. |
-| `VARNISH_EXTRA_OPTS` | se Dockerfile | Avancerat: Varnish-parametrar (trådar, keepalive m.m.). |
-| `QGSRV_SERVER_WORKERS` | `2` | Antal QGIS-processer. Sätt gärna lika med antalet CPU-kärnor. |
-
-Övriga `QGSRV_...`-inställningar för QGIS Server (t.ex. `QGSRV_CACHE_SIZE`,
-`QGSRV_LOGGING_LEVEL`) fungerar som i `3liz/qgis-map-server`.
-
-Vill du ersätta hela Varnish-konfigurationen? Montera din egen fil som
-`/etc/varnish/custom.vcl` – då används den i stället. Backend heter `qgis`.
-
-## Felsökning
-
-- **Loggar:** `docker logs kartor`
-- **Cache-statistik:** `docker exec kartor varnishstat -1` (träffar/missar, skrivs ut en gång) och `docker exec kartor varnishlog` (varje anrop, avsluta med Ctrl+C)
-- **Containern startar inte:** läs sista raderna i `docker logs`. Felaktiga inställningar och fel i VCL ger ett tydligt felmeddelande.
-- **503 de första sekunderna efter start:** QGIS Server laddar fortfarande. Containern markeras som "healthy" när allt är igång (`docker ps`).
-- **Projektet hittas inte:** kontrollera att mappen är monterad på `/qgis-data` och att filnamnet stämmer.
-
-## Licens
-
-Filerna i det här repot är utgivna under BSD 2-Clause-licensen, se [LICENSE](LICENSE).
-
-Licensen gäller bara filerna i repot. Den byggda avbilden innehåller även bland annat QGIS, py-qgis-server,
-Varnish och Ubuntu-paket, som har sina egna licenser. Licenstexterna för Ubuntu-paketen finns i avbilden under
-`/usr/share/doc/<paketnamn>/copyright`.
+Files in this repository are licensed under BSD 2-Clause; see [LICENSE](LICENSE). The image also includes QGIS, py-qgis-server, Ubuntu packages, and other software under their respective licenses. Package copyright notices are retained under `/usr/share/doc/<package>/copyright`.
