@@ -34,7 +34,7 @@ GitHub Actions builds all three variants from the same commit using Dockerfile t
 
 Use a version-specific tag for deployments when you want to control QGIS upgrades. Images are published to `ghcr.io/kristianstad/qgisserver`.
 
-All variants install the latest Ubuntu package updates at build time. QGIS packages are held at the version of the base image. Packages that QGIS Server does not use are removed: Git, Perl, `ping`, `unzip`, `wget`, and the Ubuntu upgrade and Ubuntu Pro tools. The Microsoft core fonts stay installed, but their installer package is removed. These tools are no longer available inside the container.
+All variants install the latest Ubuntu package updates at build time. QGIS packages are held at the version of the base image. Packages that QGIS Server does not use are removed: Git, Perl, `ping`, `unzip`, and the Ubuntu upgrade and Ubuntu Pro tools. The Microsoft core fonts stay installed, but their installer package is removed. These tools are no longer available inside the container. `wget` is retained for health checks.
 
 Flattening avoids retaining superseded files from base image layers, but the images no longer share layers with the upstream image. An update may therefore require downloading the whole image layer again. Additional upstream image labels are not inherited; project labels are retained. The runtime configuration is checked against the full image during CI builds.
 

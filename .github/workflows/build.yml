@@ -131,6 +131,7 @@ jobs:
           set -e
           docker exec smoke test -f /usr/share/doc/qgisserver/LICENSE
           docker exec smoke env QT_QPA_PLATFORM=offscreen python3 -c "import qgis.core, qgis.server, numpy"
+          docker exec smoke wget -q -O /dev/null http://127.0.0.1:8080/ping
           for package in git iputils-ping unzip ttf-mscorefonts-installer ubuntu-pro-client perl; do
             if docker exec smoke dpkg-query -W -f='${db:Status-Abbrev}' "$package" 2>/dev/null | grep -q '^ii'; then
               echo "::error::Package should have been removed: $package"

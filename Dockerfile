@@ -7,12 +7,14 @@ FROM 3liz/qgis-map-server:${QGIS_SERVER_VERSION} AS full
 
 # QGIS packages are held so the QGIS version always matches the base image tag.
 # Removing ms-fonts before the purge keeps the Microsoft core fonts installed.
+# Explicitly installing wget keeps it from being removed as an unused dependency.
 RUN export DEBIAN_FRONTEND=noninteractive \
       && apt-get update \
       && dpkg-query -W -f='${db:Status-Abbrev} ${Package}\n' '*qgis*' \
             | awk '$1 == "ii" { print $2 }' | xargs apt-mark hold > /dev/null \
       && apt-get upgrade -y --no-install-recommends \
             -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
+      && apt-get install -y --no-install-recommends wget \
       && rm -f /var/lib/msttcorefonts/ms-fonts \
       && apt-get purge -y --autoremove \
             apt-transport-https git iputils-ping ttf-mscorefonts-installer unzip \
