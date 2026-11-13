@@ -29,12 +29,14 @@ GitHub Actions builds all three variants from the same commit using Dockerfile t
 | Target | Tags | Contents |
 |---|---|---|
 | `standard` | `latest`, `<qgis-version>`, `sha-<commit>` | A flattened image with updated Ubuntu packages, unused packages removed (see below), a worker default, and this project's license. |
-| `slim` | `slim`, `<qgis-version>-slim`, `sha-<commit>-slim` | A flattened image without package documentation (copyright files are kept), Python test directories, or build caches. |
+| `slim` | `slim`, `<qgis-version>-slim`, `sha-<commit>-slim` | A flattened image without package documentation (copyright files are kept), Python test directories, build caches, or the LLVM 15 and Clang 15 libraries used by Qt's `qdoc`. |
 | `ultra-slim` | `ultra-slim`, `<qgis-version>-ultra-slim`, `sha-<commit>-ultra-slim` | Also removes `scipy`, `sympy`, `matplotlib`, `plotly`, and QGIS cpt-city color ramps. Plugins requiring those Python modules and projects using those ramps are unsupported. |
 
 Use a version-specific tag for deployments when you want to control QGIS upgrades. Images are published to `ghcr.io/kristianstad/qgisserver`.
 
 All variants install the latest Ubuntu package updates at build time. QGIS packages are held at the version of the base image. Packages that QGIS Server does not use are removed: Git, Perl, `ping`, `unzip`, and the Ubuntu upgrade and Ubuntu Pro tools. The Microsoft core fonts stay installed, but their installer package is removed. These tools are no longer available inside the container. `wget` is retained for health checks.
+
+All variants remove Unicode conformance test data while retaining Unicode character properties. The slim and ultra-slim variants also omit LLVM 15 and Clang 15, so `qdoc` and plugins requiring those libraries are unsupported. The slim build checks the `qdoc` library versions and fails if the base image changes them. These files belong to installed Ubuntu packages: package verification will report them missing, and package updates inside a container may restore them.
 
 Flattening avoids retaining superseded files from base image layers, but the images no longer share layers with the upstream image. An update may therefore require downloading the whole image layer again. Additional upstream image labels are not inherited; project labels are retained. The runtime configuration is checked against the full image during CI builds.
 

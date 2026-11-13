@@ -21,6 +21,11 @@ RUN export DEBIAN_FRONTEND=noninteractive \
       && apt-get clean \
       && rm -rf /var/lib/apt/lists/*
 
+RUN if [ -d /usr/share/unicode ]; then \
+      find /usr/share/unicode \( -type f -o -type l \) \
+        \( -name '*Test.txt*' -o -name '*Test.html' -o -name '*-test.txt*' \) -delete; \
+    fi
+
 LABEL org.opencontainers.image.title="QGIS Server" \
       org.opencontainers.image.description="QGIS Server based on 3liz/qgis-map-server" \
       org.opencontainers.image.base.name="docker.io/3liz/qgis-map-server"
@@ -47,6 +52,12 @@ FROM full AS slim-root
 RUN find /usr/share/doc ! -xtype d ! -name copyright ! -path /usr/share/doc/qgisserver/LICENSE -delete \
       && find /usr/share/doc -xdev -type d -empty -delete \
       && find /usr/lib/python3/dist-packages /opt/local -type d \( -name tests -o -name test \) -prune -exec rm -rf {} + \
+      && qdoc_deps="$(ldd /usr/lib/qt5/bin/qdoc)" \
+      && { printf '%s\n' "$qdoc_deps" | grep -q 'libclang-15[.]so[.]15 => /' \
+           && printf '%s\n' "$qdoc_deps" | grep -q 'libLLVM-15[.]so[.]1 => /' \
+           || { echo 'Unexpected QDoc libraries; review slim cleanup' >&2; exit 1; }; } \
+      && find /usr/lib \( -type f -o -type l \) \
+           \( -name 'libLLVM-15.so*' -o -name 'libclang-15.so*' -o -path '*/llvm-15/lib/libclang.so.1' \) -delete \
       && rm -rf /root/.cache /var/cache/debconf/* /var/cache/apt/archives/* /var/lib/apt/lists/* /tmp/*
 
 FROM flat-config AS slim

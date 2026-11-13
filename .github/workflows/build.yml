@@ -151,6 +151,34 @@ jobs:
           file map.png | grep -q 'PNG image data'
           [ "$(stat -c %s map.png)" -gt 2000 ]
 
+      - name: Verify removed image contents
+        run: |
+          set -e
+          unicode_tests=$(docker exec smoke find /usr/share/unicode \( -type f -o -type l \) \
+            \( -name '*Test.txt*' -o -name '*Test.html' -o -name '*-test.txt*' \) -print)
+          if [ -n "$unicode_tests" ]; then
+            echo "::error::Unicode test data remains:"
+            echo "$unicode_tests"
+            exit 1
+          fi
+          docker exec smoke test -s /usr/share/unicode/UnicodeData.txt
+          if [ "${{ matrix.variant }}" = standard ]; then
+            docker exec smoke /usr/lib/qt5/bin/qdoc --version
+          else
+            qdoc_libraries=$(docker exec smoke find /usr/lib \( -type f -o -type l \) \
+              \( -name 'libLLVM-15.so*' -o -name 'libclang-15.so*' -o -path '*/llvm-15/lib/libclang.so.1' \) -print)
+            if [ -n "$qdoc_libraries" ]; then
+              echo "::error::QDoc libraries remain in the slim image:"
+              echo "$qdoc_libraries"
+              exit 1
+            fi
+            dependencies=$(docker exec smoke ldd /usr/lib/qt5/bin/qdoc)
+            if ! printf '%s\n' "$dependencies" | grep -q 'libclang-15[.]so[.]15 => not found'; then
+              echo "::error::Expected QDoc to lack its Clang library in the slim image"
+              exit 1
+            fi
+          fi
+
       - name: Verify standard retains Python modules
         if: matrix.variant == 'standard'
         run: |
