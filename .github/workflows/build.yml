@@ -92,10 +92,10 @@ jobs:
             QGIS_SERVER_VERSION=${{ steps.qgis.outputs.version }}
           cache-from: type=gha,scope=${{ matrix.variant }}
           cache-to: type=gha,scope=${{ matrix.variant }},mode=max
+          no-cache-filters: full
           provenance: false
 
-      - name: Build full image for size comparison
-        if: matrix.variant != 'standard'
+      - name: Build full image for comparison
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -131,11 +131,34 @@ jobs:
           set -e
           docker exec smoke test -f /usr/share/doc/qgisserver/LICENSE
           docker exec smoke env QT_QPA_PLATFORM=offscreen python3 -c "import qgis.core, qgis.server, numpy"
+          for package in git iputils-ping unzip ttf-mscorefonts-installer ubuntu-pro-client perl; do
+            if docker exec smoke dpkg-query -W -f='${db:Status-Abbrev}' "$package" 2>/dev/null | grep -q '^ii'; then
+              echo "::error::Package should have been removed: $package"
+              exit 1
+            fi
+          done
+          docker exec smoke test -f /usr/share/fonts/truetype/msttcorefonts/Arial.ttf
+          upgrades=$(docker exec smoke sh -c 'apt-get update -qq && apt-get -s upgrade' | grep '^Inst ' || true)
+          if [ -n "$upgrades" ]; then
+            echo "::error::Packages are not up to date:"
+            echo "$upgrades"
+            exit 1
+          fi
           curl -fsS -o caps.xml "http://127.0.0.1:18080/ows/?MAP=smoke.qgs&SERVICE=WMS&REQUEST=GetCapabilities"
           grep -q '<Name>data</Name>' caps.xml
           curl -fsS -o map.png "http://127.0.0.1:18080/ows/?MAP=smoke.qgs&SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=data&STYLES=&SRS=EPSG:3006&BBOX=300000,6100000,900000,6800000&WIDTH=400&HEIGHT=400&FORMAT=image/png"
           file map.png | grep -q 'PNG image data'
           [ "$(stat -c %s map.png)" -gt 2000 ]
+
+      - name: Verify standard retains Python modules
+        if: matrix.variant == 'standard'
+        run: |
+          set -e
+          modules=$(docker run --rm --entrypoint python3 qgisserver:full -c 'import importlib.util; print(",".join(m for m in ("scipy", "sympy", "matplotlib", "plotly") if importlib.util.find_spec(m)))')
+          echo "Python modules in full image: ${modules:-none}"
+          if [ -n "$modules" ]; then
+            docker exec smoke env QT_QPA_PLATFORM=offscreen python3 -c "import $modules"
+          fi
 
       - name: Compare map with base image
         run: |
@@ -151,27 +174,53 @@ jobs:
           curl -fsS -o ref-map.png "http://127.0.0.1:18081/ows/?MAP=smoke.qgs&SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=data&STYLES=&SRS=EPSG:3006&BBOX=300000,6100000,900000,6800000&WIDTH=400&HEIGHT=400&FORMAT=image/png"
           cmp new-map.png ref-map.png
 
-      - name: Verify inherited environment
-        if: matrix.variant != 'standard'
+      - name: Verify flattened image configuration
         run: |
-          base=3liz/qgis-map-server:${{ steps.qgis.outputs.version }}
-          docker pull -q "$base"
-          env_of() { docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$1" | sort; }
-          missing=$(comm -23 <(env_of "$base") <(env_of qgisserver:test-${{ matrix.variant }}))
-          if [ -n "$missing" ]; then
-            echo "::error::Missing base image environment values:"
-            echo "$missing"
+          set -euo pipefail
+          config_of() {
+            docker image inspect "$1" | jq -S '.[0].Config
+              | del(.Labels)
+              | .Env = ((.Env // []) | sort)
+              | .WorkingDir = (if (.WorkingDir // "") == "" then "/" else .WorkingDir end)'
+          }
+          expected=$(config_of qgisserver:full)
+          actual=$(config_of qgisserver:test-${{ matrix.variant }})
+          if [ "$expected" != "$actual" ]; then
+            echo "::error::Flattened image configuration differs from the full image"
+            printf 'Full:\n%s\nFlattened:\n%s\n' "$expected" "$actual"
             exit 1
+          fi
+          if [ "${{ matrix.variant }}" = standard ]; then
+            labels_of() {
+              docker image inspect "$1" | jq -S '.[0].Config.Labels | {
+                "org.opencontainers.image.title": .["org.opencontainers.image.title"],
+                "org.opencontainers.image.description": .["org.opencontainers.image.description"],
+                "org.opencontainers.image.base.name": .["org.opencontainers.image.base.name"]
+              }'
+            }
+            expected=$(labels_of qgisserver:full)
+            actual=$(labels_of qgisserver:test-standard)
+            if [ "$expected" != "$actual" ]; then
+              echo "::error::Standard image labels differ from the full image"
+              printf 'Full:\n%s\nFlattened:\n%s\n' "$expected" "$actual"
+              exit 1
+            fi
           fi
 
       - name: Check compressed image size
-        if: matrix.variant != 'standard'
         run: |
+          set -euo pipefail
           size() { docker save "$1" | gzip -6 | wc -c; }
           full=$(size qgisserver:full)
           variant=$(size qgisserver:test-${{ matrix.variant }})
           echo "${{ matrix.variant }}: $((variant / 1048576)) MiB (full: $((full / 1048576)) MiB)" | tee -a "$GITHUB_STEP_SUMMARY"
-          [ $((variant * 10)) -lt $((full * 9)) ]
+          if [ "${{ matrix.variant }}" = standard ]; then
+            layers=$(docker image inspect -f '{{len .RootFS.Layers}}' qgisserver:test-standard)
+            [ "$layers" -eq 1 ]
+            [ "$variant" -lt "$full" ]
+          else
+            [ $((variant * 10)) -lt $((full * 9)) ]
+          fi
 
       - name: Show logs and clean up
         if: always()
